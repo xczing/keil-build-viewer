@@ -9,7 +9,7 @@
 #include <windows.h>
 
 #define APP_NAME                        "keil-build-viewer"
-#define APP_VERSION                     "v1.6"
+#define APP_VERSION                     "v1.7"
 
 #define MAX_DIR_HIERARCHY               32      /* 最大目录层级 */
 #define MAX_PATH_QTY                    32      /* 最大目录数量 */
@@ -233,6 +233,10 @@ bool                    is_keil_project             (const char *path);
 bool                    is_same_string              (const char *str1, 
                                                      const char *str2[], 
                                                      size_t      str2_qty);
+bool                    is_absolute_path            (const char *path);
+int                     path_to_absolute            (char       *out_path,
+                                                     size_t      out_path_size,
+                                                     const char *in_path);
 int                     combine_path                (char       *out_path,
                                                      size_t      out_path_size,
                                                      const char *absolute_path, 
