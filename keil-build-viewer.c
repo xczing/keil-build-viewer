@@ -29,7 +29,7 @@
  * This file is keil-build-viewer.
  *
  * Author:        Dino Haw <347341799@qq.com>
- * Version:       v1.6
+ * Version:       v1.7
  * Change Logs:
  * Version  Date         Author     Notes
  * v1.0     2023-11-10   Dino       the first version
@@ -50,6 +50,8 @@
  *                                  3. 【修复】当 Execution Region 在其他 Loard Region 中使用会重复显示的问题
  *                                  4. 【修改】将未使用的 memory 放在同一分类显示
  *                                  5. 【修改】若 Execution Region Size 为 UINT32_MAX 时，则修改为对应 memory 的 Size
+ * v1.7     2026-10-21   Dino       1. 支持使用相对路径指定 keil 工程，工程名和目录均可不带扩展名
+ *                                  2. 记录文件改为保存在 keil 工程所在目录
  */
 
 /* Includes ------------------------------------------------------------------*/
@@ -67,6 +69,7 @@ static char *                   _current_dir;
 static ENCODING_TYPE            _encoding_type  = ENCODING_TYPE_GBK;
 static PROGRESS_STYLE           _progress_style = PROGRESS_STYLE_0;
 static struct prj_path_list *   _keil_prj_path_list;
+static char                     _prj_input_raw[MAX_PATH] = {0};    /* 用户输入的 keil 工程路径，可为相对路径 */
 static struct memory_info *     _memory_info_head;
 static struct file_path_list *  _file_path_list_head;
 static const char *             _keil_prj_extension[] = 
@@ -202,7 +205,7 @@ int main(int argc, char *argv[])
     char keil_prj_name[MAX_PRJ_NAME_SIZE] = {0};
     if (argc > 1)
     {
-        int err_param = 0;
+        int err_param = 1;
         int res = parameter_process(argc, 
                                     argv, 
                                     keil_prj_name, 
@@ -215,16 +218,10 @@ int main(int argc, char *argv[])
             _log_file = fopen(file_path, "w+");
         }
 
-        if (res == -1)
+        if (res == -2)
         {
-            log_print(_log_file, "\n[ERROR] INVALID INPUT (code: %d): %s\n", GetLastError(), argv[1]);
-            result = -1;
-            goto __exit;
-        }
-        else if (res == -2)
-        {
-            log_print(_log_file, "\n[ERROR] INVALID INPUT: %s\n", argv[1]);
-            log_print(_log_file, "[ERROR] Please enter the absolute path or keil project name with extension\n");
+            log_print(_log_file, "\n[ERROR] INVALID INPUT: %s\n", argv[err_param]);
+            log_print(_log_file, "[ERROR] Please enter the absolute path, relative path or keil project name\n");
             result = -2;
             goto __exit;
         }
@@ -247,6 +244,20 @@ int main(int argc, char *argv[])
             result = 0;
             goto __exit;
         }
+        else if (res == -5)
+        {
+            log_print(_log_file, "\n[ERROR] NO keil project found: %s\n", argv[err_param]);
+            log_print(_log_file, "[ERROR] Please check the path and the keil project name\n");
+            result = -5;
+            goto __exit;
+        }
+        else if (res == -6)
+        {
+            log_print(_log_file, "\n[ERROR] NO keil project found in the folder: %s\n", argv[err_param]);
+            log_print(_log_file, "[ERROR] Please check the folder contains a keil uvproj(x) project\n");
+            result = -6;
+            goto __exit;
+        }
     }
     else {
         _log_file = fopen(file_path, "w+");
@@ -262,7 +273,7 @@ int main(int argc, char *argv[])
         log_save(_log_file, "\t%s\n", _keil_prj_path_list->items[i]);
     }
 
-    log_save(_log_file, "\n[User input] %s\n", input_param);
+    log_save(_log_file, "\n[User input] %s\n", _prj_input_raw);
     log_save(_log_file, "[Current folder] %s\n", _current_dir);
     log_save(_log_file, "[Encoding] %d\n", acp);
 
@@ -287,13 +298,24 @@ int main(int argc, char *argv[])
     else
     {
         log_print(_log_file, "\n[ERROR] NO keil project found\n");
-        log_print(_log_file, "[ERROR] Please check: %s\n", input_param);
+        log_print(_log_file, "[ERROR] Please check the folder: %s\n", _current_dir);
         result = -4;
         goto __exit;
     }
 
     log_save(_log_file, "[Keil project path] %s\n", keil_prj_path);
     log_save(_log_file, "[Keil project name] %s\n", keil_prj_name);
+
+    /* keil 工程所在目录，指定相对路径或者绝对路径时与工作目录不同 */
+    char keil_prj_dir[MAX_PATH] = {0};
+    strncpy_s(keil_prj_dir, sizeof(keil_prj_dir), keil_prj_path, strnlen_s(keil_prj_path, sizeof(keil_prj_dir)));
+    char *prj_dir_end = strrchr(keil_prj_dir, '\\');
+    if (prj_dir_end) {
+        *prj_dir_end = '\0';
+    } else {
+        snprintf(keil_prj_dir, sizeof(keil_prj_dir), "%s", _current_dir);
+    }
+    log_save(_log_file, "[Keil project folder] %s\n", keil_prj_dir);
 
     bool is_keil4_prj = false;
     if (keil_prj_name[strlen(keil_prj_name) - 1] == 'j') {
@@ -311,7 +333,7 @@ int main(int argc, char *argv[])
     /* 5. 获取启用的 project target */
     /* 打开同名的 .uvoptx 或 .uvopt 文件 */
     char target_name[MAX_PRJ_NAME_SIZE] = {0};
-    snprintf(file_path, file_path_size, "%s\\%s.uvopt", _current_dir, keil_prj_name);
+    snprintf(file_path, file_path_size, "%s\\%s.uvopt", keil_prj_dir, keil_prj_name);
     if (is_keil4_prj == false) {
         strncat_s(file_path, file_path_size, "x", 1);
     }
@@ -327,7 +349,7 @@ int main(int argc, char *argv[])
 
     /* 6. 获取 map 和 htm 文件所在的目录及 device 和 output_name 信息 */
     /* 打开同名的 .uvprojx 或 .uvproj 文件 */
-    snprintf(file_path, file_path_size, "%s\\%s.uvproj", _current_dir, keil_prj_name);
+    snprintf(file_path, file_path_size, "%s\\%s.uvproj", keil_prj_dir, keil_prj_name);
     if (is_keil4_prj == false) {
         strncat_s(file_path, file_path_size, "x", 1);
     }
@@ -579,7 +601,8 @@ int main(int argc, char *argv[])
     }
 
     /* 10.2 打开记录文件，打开失败则新建 */
-    snprintf(file_path, file_path_size, "%s\\%s-record.txt", _current_dir, APP_NAME);
+    /* 记录文件与 keil 工程放在一起，保证每个工程的增量对比互不干扰 */
+    snprintf(file_path, file_path_size, "%s\\%s-record.txt", keil_prj_dir, APP_NAME);
 
     bool is_has_record = true;
     FILE *p_file = fopen(file_path, "r");
@@ -807,7 +830,7 @@ int main(int argc, char *argv[])
     }
 
     /* 13. 保存本次 region 信息至记录文件 */
-    snprintf(file_path, file_path_size, "%s\\%s-record.txt", _current_dir, APP_NAME);
+    snprintf(file_path, file_path_size, "%s\\%s-record.txt", keil_prj_dir, APP_NAME);
 
     if (uvprojx_file.is_enable_lto) {
         p_file = fopen(file_path, "w+");
@@ -871,7 +894,7 @@ __exit:
 
 /**
  * @brief  入口参数处理
- * @note   
+ * @note   keil 工程支持绝对路径、相对路径、目录及工程名（可不带扩展名）
  * @param  param_qty:   参数数量
  * @param  param[]:     参数列表
  * @param  prj_name:    [out] keil 工程名
@@ -933,76 +956,145 @@ int parameter_process(int    param_qty,
         else 
         {
             char *last_slash = NULL;
-            size_t param_len = strnlen_s(param[i], MAX_PATH);
+            char abs_path[MAX_PATH] = {0};
+            char prj_dir[MAX_PATH] = {0};
+            char prj_base[MAX_PRJ_NAME_SIZE] = {0};
+            bool is_found = false;
 
-            /* 绝对路径 */
-            if (param[i][1] == ':')
+            /* 相对路径以程序运行的工作目录为基准，统一转换成绝对路径 */
+            if (path_to_absolute(abs_path, sizeof(abs_path), param[i]) != 0)
             {
-                DWORD attributes = GetFileAttributes(param[i]);
-                if (attributes == INVALID_FILE_ATTRIBUTES) {
-                    return -1;
-                }
-
-                /* 目录 */
-                if (attributes & FILE_ATTRIBUTE_DIRECTORY)
-                {
-                    strncpy_s(_current_dir, sizeof(_current_dir), param[i], param_len);
-
-                    if (param[i][param_len - 1] == '\\') {
-                        _current_dir[param_len - 1] = '\0';
-                    }
-                }
-                /* 文件 */
-                else
-                {
-                    /* 不是 keil 工程则报错退出 */
-                    if (is_keil_project(param[i]) == false) {
-                        return -2;
-                    }
-                    strncpy_s(prj_path, path_size, param[i], param_len);
-
-                    last_slash = strrchr(prj_path, '\\');
-                    if (last_slash)
-                    {
-                        last_slash += 1;
-                        strncpy_s(prj_name, name_size, last_slash, strnlen(last_slash, name_size));
-                    }
-                }
-            }
-            /* 不支持相对路径 */
-            else if (param[i][0] == '\\' || param[i][0] == '.') {
+                *err_param = i;
                 return -2;
             }
-            /* 文件名 */
+
+            DWORD attributes = GetFileAttributes(abs_path);
+
+            if (attributes != INVALID_FILE_ATTRIBUTES
+            &&  (attributes & FILE_ATTRIBUTE_DIRECTORY))
+            {
+                /* 输入的是目录，工程名留空待搜索 */
+                strncpy_s(prj_dir, sizeof(prj_dir), abs_path, strnlen_s(abs_path, sizeof(prj_dir)));
+            }
             else
             {
-                snprintf(prj_path, path_size, "%s\\%s", _current_dir, param[i]);
-
-                /* 非 keil 工程则检查是否有扩展名 */
-                if (is_keil_project(param[i]) == false)
+                /* 输入的是文件或者尚未存在的工程名，分离所在目录和工程名 */
+                char *sep = strrchr(abs_path, '\\');
+                if (sep)
                 {
-                    /* 有扩展名报错退出，无扩展名则从搜索到的列表里进行匹配 */
-                    char *dot = strrchr(param[i], '.');
-                    if (dot) {
+                    if (strnlen(sep + 1, sizeof(prj_base)) >= sizeof(prj_base)) {
+                        *err_param = i;
                         return -2;
                     }
 
-                    for (size_t index = 0; index < _keil_prj_path_list->size; index++) 
+                    *sep = '\0';
+                    strncpy_s(prj_dir, sizeof(prj_dir), abs_path, strnlen_s(abs_path, sizeof(prj_dir)));
+                    strncpy_s(prj_base, sizeof(prj_base), sep + 1, strnlen(sep + 1, sizeof(prj_base)));
+                    *sep = '\\';
+
+                    /* 盘符根目录被分离成 "D:" ，需要还原成 "D:\" */
+                    if (prj_dir[1] == ':') {
+                        strncat_s(prj_dir, sizeof(prj_dir), "\\", 1);
+                    }
+                }
+                else
+                {
+                    strncpy_s(prj_dir, sizeof(prj_dir), _current_dir, strnlen_s(_current_dir, sizeof(prj_dir)));
+                    strncpy_s(prj_base, sizeof(prj_base), abs_path, strnlen_s(abs_path, sizeof(prj_base)));
+                }
+            }
+
+            /* 目录必须存在 */
+            DWORD dir_attributes = GetFileAttributes(prj_dir);
+            if (dir_attributes == INVALID_FILE_ATTRIBUTES
+            ||  (dir_attributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+            {
+                *err_param = i;
+                return -5;
+            }
+
+            if (prj_base[0] != '\0')
+            {
+                if (attributes != INVALID_FILE_ATTRIBUTES)
+                {
+                    /* 文件存在，但不是 keil 工程则报错退出 */
+                    if (is_keil_project(prj_base) == false) {
+                        *err_param = i;
+                        return -2;
+                    }
+                    strncpy_s(prj_path, path_size, abs_path, strnlen_s(abs_path, path_size));
+                    is_found = true;
+                }
+                else
+                {
+                    /* 文件不存在，尝试补全 keil 工程的扩展名 */
+                    char prj_test[MAX_PATH] = {0};
+                    for (size_t ext = 0; ext < sizeof(_keil_prj_extension) / sizeof(char *); ext++)
                     {
-                        if (strstr(_keil_prj_path_list->items[index], param[i])) 
+                        snprintf(prj_test, sizeof(prj_test), "%s%s", abs_path, _keil_prj_extension[ext]);
+                        if (GetFileAttributes(prj_test) != INVALID_FILE_ATTRIBUTES)
                         {
-                            strncpy_s(prj_path, path_size, _keil_prj_path_list->items[index], strnlen_s(_keil_prj_path_list->items[index], MAX_PATH));
+                            strncpy_s(prj_path, path_size, prj_test, strnlen_s(prj_test, path_size));
+                            is_found = true;
                             break;
                         }
                     }
                 }
+            }
 
-                last_slash = strrchr(prj_path, '\\');
-                if (last_slash)
+            /* 仍未确定工程，在目录内搜索 keil 工程 */
+            if (is_found == false)
+            {
+                struct prj_path_list *dir_prj_list = prj_path_list_init(MAX_PATH_QTY);
+                search_files_by_extension(prj_dir,
+                                          strnlen_s(prj_dir, sizeof(prj_dir)),
+                                          _keil_prj_extension,
+                                          sizeof(_keil_prj_extension) / sizeof(char *),
+                                          dir_prj_list);
+
+                for (size_t index = 0; index < dir_prj_list->size; index++)
                 {
-                    last_slash += 1;
-                    strncpy_s(prj_name, name_size, last_slash, strnlen(last_slash, name_size));
+                    char *item = dir_prj_list->items[index];
+                    size_t item_len = strnlen_s(item, path_size);
+
+                    if (item_len >= path_size) {
+                        continue;   /* 路径过长，无法保存 */
+                    }
+
+                    /* 未指定工程名时与默认行为一致，选择搜索到的最后一个 keil 工程 */
+                    if (prj_base[0] == '\0')
+                    {
+                        if (index == dir_prj_list->size - 1)
+                        {
+                            strncpy_s(prj_path, path_size, item, item_len);
+                            is_found = true;
+                            break;
+                        }
+                        continue;
+                    }
+
+                    if (strstr(item, prj_base))
+                    {
+                        strncpy_s(prj_path, path_size, item, item_len);
+                        is_found = true;
+                        break;
+                    }
                 }
+                prj_path_list_free(dir_prj_list);
+
+                if (is_found == false) {
+                    *err_param = i;
+                    return (prj_base[0] == '\0') ? -6 : -5;
+                }
+            }
+
+            strncpy_s(_prj_input_raw, sizeof(_prj_input_raw), param[i], strnlen_s(param[i], sizeof(_prj_input_raw)));
+
+            last_slash = strrchr(prj_path, '\\');
+            if (last_slash)
+            {
+                last_slash += 1;
+                strncpy_s(prj_name, name_size, last_slash, strnlen(last_slash, name_size - 1));
             }
         }
     }
@@ -2988,6 +3080,63 @@ void log_write(FILE *p_log,
     }
     
     va_end(args);
+}
+
+
+/**
+ * @brief  判断路径是否为绝对路径
+ * @note   支持 "D:\xxx"、"D:/xxx" 和 UNC 路径 "\\server\xxx"
+ * @param  path: 待判断的路径
+ * @retval true: 绝对路径 | false: 相对路径
+ */
+bool is_absolute_path(const char *path)
+{
+    if (path == NULL || path[0] == '\0') {
+        return false;
+    }
+
+    if (isalpha((unsigned char)path[0]) && path[1] == ':') {
+        return true;
+    }
+
+    if ((path[0] == '\\' || path[0] == '/') 
+    &&  (path[1] == '\\' || path[1] == '/')) {
+        return true;
+    }
+
+    return false;
+}
+
+
+/**
+ * @brief  将路径转换成绝对路径
+ * @note   相对路径以程序运行的工作目录为基准，同时对 '.'、'..' 和 '/' 进行归一化
+ * @param  out_path:      [out] 转换后的绝对路径
+ * @param  out_path_size: out_path 的大小
+ * @param  in_path:       输入的绝对路径或相对路径
+ * @retval 0: 正常 | -x: 错误
+ */
+int path_to_absolute(char *out_path, 
+                     size_t out_path_size, 
+                     const char *in_path)
+{
+    char join_path[MAX_PATH * 2] = {0};
+    const char *path = in_path;
+
+    if (is_absolute_path(in_path) == false)
+    {
+        snprintf(join_path, sizeof(join_path), "%s\\%s", _current_dir, in_path);
+        path = join_path;
+    }
+
+    DWORD len = GetFullPathNameA(path, (DWORD)out_path_size, out_path, NULL);
+    if (len == 0 || len >= out_path_size)
+    {
+        out_path[0] = '\0';
+        return -1;
+    }
+
+    return 0;
 }
 
 
